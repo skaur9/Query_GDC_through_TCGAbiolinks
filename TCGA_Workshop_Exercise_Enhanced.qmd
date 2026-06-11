@@ -1,0 +1,1023 @@
+---
+title: "TCGA Analysis Workshop - Automated Workflow"
+subtitle: "Exploring Gene Expression in Cancer"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    theme: cosmo
+    code-fold: true
+    code-tools: true
+    self-contained: true
+  pdf:
+    toc: true
+    documentclass: article
+    fontsize: 11pt
+    geometry: margin=1in
+editor: visual
+author: "Workshop Participant"
+date: "`r Sys.time()`"
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: false
+---
+
+# Workshop Overview
+
+This workshop will guide you through analyzing cancer genomics data from TCGA (The Cancer Genome Atlas) using R. By the end, you'll be able to:
+
+-   Download gene expression, clinical and mutation data for any TCGA cancer type
+-   Analyze expression of your genes of interest
+-   Visualize differences between tumor and normal samples
+-   Perform differential expression analysis, mutation oncoplots and correlation plots
+-   Create publication-quality plots
+
+**Key Features:** Most of the workflow runs automatically! You only need to specify your genes of interest and cancer type at the beginning.
+
+------------------------------------------------------------------------
+
+# Workshop Learning Objectives - Checklist
+
+By completing this workshop, you should be able to:
+
+-   [ ] Download TCGA data using TCGAbiolinks
+-   [ ] Process and normalize RNA-seq count data
+-   [ ] Perform differential expression analysis
+-   [ ] Create publication-quality visualizations
+-   [ ] Interpret survival analysis results
+-   [ ] Understand gene co-expression patterns
+-   [ ] Analyze mutation data and create oncoplots
+-   [ ] Explore clinical variables and their impact
+-   [ ] Modify the workflow for your own research questions
+
+------------------------------------------------------------------------
+
+# PART 1: Setup & Configuration
+
+## 1.1 Install Required Packages (ONE-TIME ONLY)
+
+**Run this section only ONCE when setting up R for the first time**
+
+```{r install-packages, eval=FALSE}
+# Install BiocManager if not already installed
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+# Install Bioconductor packages
+BiocManager::install(c(
+  "TCGAbiolinks",
+  "SummarizedExperiment", 
+  "edgeR",
+  "DESeq2",
+  "org.Hs.eg.db",
+  "maftools"
+), ask = FALSE, update = FALSE)
+
+# Install CRAN packages
+install.packages(c(
+  "dplyr", "ggplot2", "pheatmap", "RColorBrewer",
+  "survival", "survminer", "ggpubr", "tibble", 
+  "Hmisc", "patchwork", "gridExtra", "reactable"
+))
+
+```
+
+\
+
+## 1.2 Load Required Libraries
+
+```{r setup, message=FALSE, warning=FALSE}
+# Load all required libraries
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+library(dplyr)
+library(ggplot2)
+library(edgeR)
+library(DESeq2)
+library(pheatmap)
+library(RColorBrewer)
+library(survival)
+library(survminer)
+library(ggpubr)
+library(tibble)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(maftools)
+library(patchwork)
+library(gridExtra)
+library(reactable)
+
+# Set working directory for saving results or create a new project
+# MODIFY THIS to your preferred location
+# MG - remove setwd and talk through set new project in workshop 
+# setwd("~/TCGA_Workshop_Results")
+# 
+# # Create directory if it doesn't exist
+# dir.create("~/TCGA_Workshop_Results", showWarnings = FALSE)
+
+cat("All libraries loaded successfully!\n")
+cat("Results will be saved to:", getwd(), "\n")
+```
+
+------------------------------------------------------------------------
+
+# PART 2: Customize Your Analysis
+
+## 2.1 Define Your Research Question
+
+**EDIT THESE TWO PARAMETERS TO CUSTOMIZE YOUR ANALYSIS:**
+
+```{r parameters}
+# ==============================================================================
+# ⭐ MODIFY THESE PARAMETERS FOR YOUR ANALYSIS ⭐
+# ==============================================================================
+
+# 1. Specify your genes of interest (Gene Symbols)
+genes_of_interest <- c(
+  "TP53",      # Tumor suppressor
+  "KRAS",      # Oncogene
+  "EGFR",      # Growth factor receptor
+  "MYC",       # Transcription factor
+  "BRCA1",     # DNA repair
+  "PTEN"       # Tumor suppressor
+)
+
+# Note: When editing genes, be mindful of the whitespace and capitalisation. If you are unsure, check your gene symbol at https://www.ncbi.nlm.nih.gov/datasets/gene/
+
+# 2. Specify your TCGA cancer type
+# Common options:
+# "TCGA-BRCA" = Breast Cancer
+# "TCGA-LUAD" = Lung Adenocarcinoma
+# "TCGA-STAD" = Stomach Adenocarcinoma
+# "TCGA-COAD" = Colon Adenocarcinoma
+# "TCGA-PRAD" = Prostate Adenocarcinoma
+# "TCGA-THCA" = Thyroid Carcinoma
+# "TCGA-LIHC" = Liver Hepatocellular Carcinoma
+# "TCGA-KIRC" = Kidney Renal Clear Cell Carcinoma
+
+cancer_type <- "TCGA-PAAD"
+
+# ==============================================================================
+# ⚠️ DO NOT MODIFY BELOW THIS LINE - AUTOMATION STARTS HERE ⚠️
+# ==============================================================================
+
+cat("\n=== ANALYSIS CONFIGURATION ===\n")
+cat("Genes of Interest:", paste(genes_of_interest, collapse = ", "), "\n")
+cat("Cancer Type:", cancer_type, "\n")
+```
+
+------------------------------------------------------------------------
+
+# PART 3: Automated Data Download & Processing
+
+## 3.1 Query and Download Gene Expression Data
+
+```{r query-download, include=FALSE}
+cat("Step 1: Querying TCGA database for", cancer_type, "...\n")
+
+# Query for RNA-seq gene expression data
+query_exp <- GDCquery(
+  project = cancer_type,
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts",
+  sample.type = c("Primary Tumor", "Solid Tissue Normal")
+)
+
+cat("Query completed!\n")
+cat("   Samples found:", length(query_exp$results[[1]]$id), "\n\n")
+
+cat("Step 2: Downloading data (this may take several minutes)...\n")
+GDCdownload(query_exp, method = "api")
+```
+
+```{r}
+
+cat("Step 3: Preparing data for analysis...\n")
+data_exp <- GDCprepare(query_exp)
+
+cat("Total genes:", nrow(data_exp), "\n")
+cat("Total samples:", ncol(data_exp), "\n\n")
+```
+
+## 3.2 Extract and Process Count Matrix
+
+```{r process-counts}
+cat("Processing count matrix...\n")
+
+# Extract raw counts
+counts_matrix <- assay(data_exp)
+
+# Clean ENSEMBL IDs (remove version numbers)
+rownames(counts_matrix) <- gsub("\\..*", "", rownames(counts_matrix))
+
+cat("Count matrix extracted!\n")
+cat("Dimensions:", nrow(counts_matrix), "genes ×", ncol(counts_matrix), "samples\n\n")
+```
+
+## 3.3 Map Gene Symbols to ENSEMBL IDs
+
+```{r map-genes}
+cat("Mapping gene symbols to ENSEMBL IDs...\n")
+
+# Map gene symbols to ENSEMBL IDs
+mapping <- AnnotationDbi::select(
+  org.Hs.eg.db,
+  keys = genes_of_interest,
+  columns = c("ENSEMBL", "SYMBOL"),
+  keytype = "SYMBOL"
+)
+
+# Remove duplicates and missing values
+mapping <- mapping[!is.na(mapping$ENSEMBL), ]
+mapping <- mapping[!duplicated(mapping$SYMBOL), ]
+
+# Check which genes are available in the dataset
+ensembl_ids <- rownames(counts_matrix)
+available <- mapping[mapping$ENSEMBL %in% ensembl_ids, ]
+missing <- setdiff(genes_of_interest, available$SYMBOL)
+
+cat("\n Gene Mapping Results:\n")
+cat("   Genes found:", length(available$SYMBOL), "/", length(genes_of_interest), "\n")
+if (length(missing) > 0) {
+  cat("Genes not found:", paste(missing, collapse = ", "), "\n")
+} else {
+  cat("All genes found in dataset!\n")
+}
+
+# Update genes of interest to only include available genes
+genes_of_interest <- available$SYMBOL
+cat("\n Proceeding with", length(genes_of_interest), "genes\n\n")
+```
+
+## 3.4 Perform Differential Expression Analysis (ALL GENES)
+
+```{r differential-expression}
+cat("Running Differential Expression Analysis...\n")
+cat("This analyzes ALL genes in the dataset to find tumor vs normal differences\n\n")
+
+# Extract metadata
+metadata <- colData(data_exp) %>% as.data.frame()
+
+# Create sample type labels
+metadata$sample_type <- ifelse(
+  metadata$shortLetterCode == "TP", "Tumor",
+  ifelse(metadata$shortLetterCode == "NT", "Normal", NA)
+)
+
+# Remove samples without proper labels
+metadata <- metadata[!is.na(metadata$sample_type), ]
+counts_for_de <- counts_matrix[, metadata$barcode]
+
+# Ensure sample alignment
+metadata <- metadata[match(colnames(counts_for_de), metadata$barcode), ]
+
+cat("Samples for analysis:\n")
+cat("Tumor samples:", sum(metadata$sample_type == "Tumor"), "\n")
+cat("Normal samples:", sum(metadata$sample_type == "Normal"), "\n\n")
+
+# Create DESeq2 object
+dds <- DESeqDataSetFromMatrix(
+  countData = counts_for_de,
+  colData = metadata,
+  design = ~ sample_type
+)
+
+# Run DESeq2
+cat("Running DESeq2 normalization and testing...\n")
+dds <- DESeq(dds)
+
+# Get results
+de_results <- results(dds, contrast = c("sample_type", "Tumor", "Normal"))
+de_results <- as.data.frame(de_results)
+
+# Add gene symbols
+de_results$ensembl <- rownames(de_results)
+gene_mapping_all <- AnnotationDbi::select(
+  org.Hs.eg.db,
+  keys = de_results$ensembl,
+  columns = c("SYMBOL", "ENSEMBL"),
+  keytype = "ENSEMBL"
+)
+gene_mapping_all <- gene_mapping_all[!duplicated(gene_mapping_all$ENSEMBL), ]
+de_results <- merge(de_results, gene_mapping_all, by.x = "ensembl", by.y = "ENSEMBL", all.x = TRUE)
+
+# Sort by adjusted p-value
+de_results <- de_results[order(de_results$padj, na.last = TRUE), ]
+
+cat("Differential Expression Analysis Complete!\n")
+cat("Total genes tested:", nrow(de_results), "\n")
+cat("Significant genes (padj < 0.05):", sum(de_results$padj < 0.05, na.rm = TRUE), "\n\n")
+
+# Save results
+write.csv(de_results, "DE_results_all_genes.csv", row.names = FALSE)
+cat("Full results saved to: DE_results_all_genes.csv\n\n")
+
+# Display top 20 differentially expressed genes
+cat("Top 20 Differentially Expressed Genes:\n")
+top_genes <- head(de_results[!is.na(de_results$SYMBOL), 
+                             c("SYMBOL", "log2FoldChange", "padj")], 20)
+rownames(top_genes) <- NULL
+print(top_genes)
+```
+
+## 3.5 Normalize Expression Data (logCPM) and extract genes of interest for plotting
+
+```{r normalize}
+cat("\n Normalizing expression data for visualization...\n")
+# Normalize using edgeR
+dge <- DGEList(counts = counts_matrix)
+dge <- calcNormFactors(dge)
+logCPM <- cpm(dge, log = TRUE, prior.count = 1)
+
+cat("Normalization complete!\n")
+cat("Expression matrix:", nrow(logCPM), "genes ×", ncol(logCPM), "samples\n\n")
+
+# Subset to genes of interest
+logCPM_subset <- logCPM[available$ENSEMBL, ]
+rownames(logCPM_subset) <- available$SYMBOL
+
+cat("Subset Expression matrix:", nrow(logCPM_subset), "genes ×", ncol(logCPM_subset), "samples\n\n")
+
+
+```
+
+## 3.6 Extract DE Results for Your Genes of Interest
+
+```{r extract-interest-genes}
+cat("\n Extracting results for your genes of interest...\n")
+
+# Filter for genes of interest
+genes_de_results <- de_results[de_results$SYMBOL %in% genes_of_interest, 
+                               c("SYMBOL", "log2FoldChange", "pvalue", "padj")]
+genes_de_results <- genes_de_results[order(genes_de_results$padj), ]
+rownames(genes_de_results) <- NULL
+
+cat("\n Differential Expression Results for Your Genes:\n")
+print(genes_de_results)
+
+# Save results for genes of interest
+write.csv(genes_de_results, "DE_results_genes_of_interest.csv", row.names = FALSE)
+cat("\n Results saved to: DE_results_genes_of_interest.csv\n")
+```
+
+
+## 3.7 Prepare Metadata
+
+```{r prepare-metadata}
+cat("Preparing sample metadata...\n")
+
+# Extract and clean metadata
+meta <- colData(data_exp) %>% as.data.frame()
+
+# Standardize sample identifiers
+colnames(logCPM_subset) <- substr(colnames(logCPM_subset), 1, 16)
+meta$barcode <- substr(meta$barcode, 1, 16)
+
+# Keep only common samples
+common_samples <- intersect(colnames(logCPM_subset), meta$barcode)
+logCPM_subset <- logCPM_subset[, common_samples]
+meta <- meta[meta$barcode %in% common_samples, ]
+
+# Align metadata to expression matrix
+meta <- meta[match(colnames(logCPM_subset), meta$barcode), ]
+
+# Verify alignment
+if (all(colnames(logCPM_subset) == meta$barcode)) {
+  cat("Metadata aligned with expression data!\n\n")
+} else {
+  cat("Warning: Metadata alignment issue!\n\n")
+}
+```
+
+## 3.8 Prepare Clinical Data for Survival Analysis
+
+```{r clinical-data}
+cat("Preparing clinical data for survival analysis...\n")
+
+# Create survival dataframe
+clinical_clean <- meta %>%
+  dplyr::select(patient = submitter_id, vital_status, 
+                days_to_death, days_to_last_follow_up, shortLetterCode) %>%
+  dplyr::mutate(
+    time = ifelse(!is.na(days_to_death), days_to_death, days_to_last_follow_up),
+    status = ifelse(vital_status == "Dead", 1, 0)
+  ) %>%
+  dplyr::distinct(patient, .keep_all = TRUE) %>%
+  filter(!is.na(time), time > 0)
+
+cat("Clinical data prepared!\n")
+cat("Patients with survival data:", nrow(clinical_clean), "\n")
+cat("Events (deaths):", sum(clinical_clean$status == 1), "\n\n")
+```
+
+## 3.9 Save Analysis Workspace
+
+```{r save-workspace}
+cat("Saving analysis workspace...\n")
+
+# Save all objects for later use
+save.image(file = paste0(cancer_type,"_analysis_workspace.RData"))
+
+cat("Workspace saved to:", paste0(cancer_type,"_analysis_workspace.RData"), "\n")
+cat("You can reload this anytime with: load('", cancer_type,"_analysis_workspace.RData')\n\n")
+```
+
+------------------------------------------------------------------------
+
+# PART 4: Visualization & Results
+
+## 4.1 Volcano Plot - Overview of All DE Genes
+
+```{r volcano-plot, fig.width=10, fig.height=8}
+cat("Creating Volcano Plot...\n")
+
+# Prepare data for volcano plot
+volcano_data <- de_results %>%
+  filter(!is.na(padj), !is.na(log2FoldChange)) %>%
+  mutate(
+    significance = case_when(
+      padj < 0.05 & abs(log2FoldChange) > 1 ~ "Significant",
+      TRUE ~ "Not Significant"
+    )
+  )
+
+# Create volcano plot
+p_volcano <- ggplot(volcano_data, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(aes(color = significance), alpha = 0.5, size = 1) +
+  geom_point(data = volcano_data[!is.na(volcano_data$gene_label), ],
+             aes(x = log2FoldChange, y = -log10(padj)),
+             color = "red", size = 3, shape = 21, fill = "red") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "blue") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
+  scale_color_manual(values = c("Significant" = "red", "Not Significant" = "gray60")) +
+  labs(
+    title = paste("Volcano Plot:", cancer_type, "Tumor vs Normal"),
+    subtitle = "Your genes of interest are highlighted in red",
+    x = "Log2 Fold Change (Tumor vs Normal)",
+    y = "-Log10 Adjusted P-value",
+    color = "Significance"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray40")
+  )
+
+print(p_volcano)
+
+ggsave("volcano_plot.pdf", p_volcano, width = 10, height = 8)
+cat("Volcano plot saved to: volcano_plot.pdf\n\n")
+```
+
+## 4.2 Boxplots - Expression in Tumor vs Normal
+
+```{r boxplots, fig.width=12, fig.height=10}
+cat("Creating expression boxplots for your genes...\n")
+
+# Prepare data for boxplots
+expr_long <- logCPM_subset %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("gene") %>%
+  tidyr::pivot_longer(-gene, names_to = "sample", values_to = "expression") %>%
+  left_join(
+    meta %>% dplyr::select(sample = barcode, group = shortLetterCode),
+    by = "sample"
+  ) %>%
+  filter(group %in% c("TP", "NT")) %>%
+  mutate(group = factor(group, levels = c("NT", "TP"),
+                       labels = c("Normal", "Tumor")))
+
+# Create boxplots
+boxplot_list <- list()
+
+for (gene in genes_of_interest) {
+  gene_data <- expr_long %>% filter(gene == !!gene)
+  
+  # Statistical test
+  stat_test <- wilcox.test(
+    expression ~ group,
+    data = gene_data
+  )
+  
+  # Get DE results for this gene
+  gene_de <- genes_de_results[genes_de_results$SYMBOL == gene, ]
+  fc_text <- ifelse(nrow(gene_de) > 0, 
+                   sprintf("FC=%.2f, padj=%.2e", 
+                          2^gene_de$log2FoldChange, 
+                          gene_de$padj),
+                   "")
+  
+  p <- ggplot(gene_data, aes(x = group, y = expression, fill = group)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+    geom_jitter(width = 0.2, alpha = 0.3, size = 1) +
+    scale_fill_manual(values = c("Normal" = "#4DBBD5", "Tumor" = "#E64B35")) +
+    labs(
+      title = gene,
+      subtitle = fc_text,
+      x = "",
+      y = "Expression (log2 CPM)"
+    ) +
+    theme_bw() +
+    theme(
+      legend.position = "none",
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 9, color = "gray40")
+    ) +
+    stat_compare_means(
+      method = "wilcox.test",
+      label = "p.format",
+      size = 3.5
+    )
+  
+  boxplot_list[[gene]] <- p
+}
+
+# Arrange plots
+combined_boxplots <- wrap_plots(boxplot_list, ncol = 2)
+print(combined_boxplots)
+
+ggsave("expression_boxplots.pdf", combined_boxplots, width = 12, height = 10)
+cat("Coxplots saved to: expression_boxplots.pdf\n\n")
+```
+
+## 4.3 Heatmap - Expression Pattern Across Samples
+
+```{r heatmap, fig.width=12, fig.height=8}
+cat("Creating expression heatmap...\n")
+
+# Prepare expression matrix
+expr_mat <- logCPM_subset
+
+# Prepare sample annotation
+sample_info <- meta %>%
+  filter(barcode %in% colnames(expr_mat)) %>%
+  dplyr::select(sample = barcode, shortLetterCode) %>%
+  mutate(shortLetterCode = factor(shortLetterCode,
+                                 levels = c("NT", "TP"),
+                                 labels = c("Normal", "Tumor"))) %>%
+  arrange(shortLetterCode)
+
+# Reorder samples
+expr_mat <- expr_mat[, sample_info$sample]
+
+# Create annotation
+ann_col <- data.frame(
+  Group = sample_info$shortLetterCode,
+  row.names = sample_info$sample
+)
+
+# Create heatmap
+pheatmap(
+  expr_mat,
+  annotation_col = ann_col,
+  show_rownames = TRUE,
+  show_colnames = FALSE,
+  color = colorRampPalette(rev(brewer.pal(n = 11, name = "RdYlBu")))(100),
+  cluster_cols = TRUE,
+  cluster_rows = TRUE,
+  clustering_method = "ward.D2",
+  scale = "row",
+  annotation_colors = list(Group = c("Normal" = "#4DBBD5", "Tumor" = "#E64B35")),
+  main = paste("Gene Expression Heatmap:", cancer_type),
+  fontsize = 10,
+  fontsize_row = 8
+)
+
+cat("Heatmap created!\n\n")
+```
+
+## 4.4 Survival Analysis - Tumor Samples Only
+
+```{r survival, fig.width=12, fig.height=10}
+cat("Creating survival curves...\n")
+
+# Prepare patient IDs
+patient_ids <- substr(colnames(logCPM_subset), 1, 12)
+
+# List to store plots
+survival_plots <- list()
+
+for (gene in genes_of_interest) {
+  
+  # Expression data
+  exp_df <- data.frame(
+    patient = patient_ids,
+    expr = as.numeric(logCPM_subset[gene, ])
+  ) %>%
+    group_by(patient) %>%
+    summarise(expr = mean(expr, na.rm = TRUE))
+  
+  # Merge with clinical data
+  merged <- inner_join(clinical_clean, exp_df, by = "patient")
+  
+  # High vs Low expression (median split)
+  merged$expr_group <- ifelse(
+    merged$expr >= median(merged$expr, na.rm = TRUE),
+    "High", "Low"
+  )
+  
+  # Keep only tumor samples
+  merged <- merged[merged$shortLetterCode == "TP", ]
+  
+  # Skip if insufficient data
+  if (length(unique(merged$expr_group)) < 2) {
+    cat("Skipping", gene, "- insufficient variation\n")
+    next
+  }
+  
+  # Survival analysis
+  fit <- survfit(Surv(time, status) ~ expr_group, data = merged)
+  
+  # Cox proportional hazards
+  cox <- coxph(Surv(time, status) ~ expr_group, data = merged)
+  cox_summary <- summary(cox)
+  
+  # Extract HR
+  hr <- round(cox_summary$coefficients[, "exp(coef)"], 2)
+  ci_lower <- round(cox_summary$conf.int[, "lower .95"], 2)
+  ci_upper <- round(cox_summary$conf.int[, "upper .95"], 2)
+  hr_text <- paste0("HR = ", hr, " (95% CI: ", ci_lower, "–", ci_upper, ")")
+  
+  # Create survival plot
+  p_surv <- ggsurvplot(
+    fit,
+    data = merged,
+    pval = TRUE,
+    title = paste0(gene, " Expression & Survival (Tumor Patients)"),
+    risk.table = TRUE,
+    risk.table.height = 0.25,
+    palette = c("#E64B35", "#4DBBD5"),
+    legend.labs = c("High", "Low"),
+    ggtheme = theme_bw(),
+    legend.title = "Expression",
+    xlab = "Time (days)"
+  )
+  
+  # Add HR annotation
+  p_surv$plot <- p_surv$plot +
+    annotate("text",
+            x = max(merged$time, na.rm = TRUE) * 0.6,
+            y = 0.1,
+            label = hr_text,
+            size = 3.5)
+  
+  survival_plots[[gene]] <- p_surv
+}
+
+# Display plots
+if (length(survival_plots) > 0) {
+  arrange_ggsurvplots(survival_plots, ncol = 2)
+  cat("Survival analysis complete!\n\n")
+} else {
+  cat("No survival plots generated\n\n")
+}
+```
+
+## 4.5 Correlation Analysis - Gene Co-expression
+
+```{r correlation, fig.width=10, fig.height=8}
+cat("Analyzing gene correlations...\n")
+
+# Prepare expression matrix (tumor samples only)
+expr_mat <- t(logCPM_subset[genes_of_interest, ])
+tumor_samples <- meta$barcode[meta$shortLetterCode == "TP"]
+tumor_samples <- tumor_samples[tumor_samples %in% rownames(expr_mat)]
+expr_tumor <- expr_mat[tumor_samples, , drop = FALSE]
+
+# Calculate Spearman correlation
+library(Hmisc)
+res <- rcorr(as.matrix(expr_tumor), type = "spearman")
+cor_mat <- res$r
+p_mat <- res$P
+
+# Create significance asterisks
+sig_stars <- matrix("", nrow = nrow(p_mat), ncol = ncol(p_mat))
+sig_stars[p_mat <= 0.001] <- "***"
+sig_stars[p_mat <= 0.01 & p_mat > 0.001] <- "**"
+sig_stars[p_mat <= 0.05 & p_mat > 0.01] <- "*"
+
+# Combine correlations and significance
+display_mat <- matrix("", nrow = nrow(cor_mat), ncol = ncol(cor_mat))
+for (i in 1:nrow(cor_mat)) {
+  for (j in 1:ncol(cor_mat)) {
+    display_mat[i, j] <- paste0(sprintf("%.2f", cor_mat[i, j]), sig_stars[i, j])
+  }
+}
+
+# Create heatmap
+pheatmap(
+  cor_mat,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  display_numbers = display_mat,
+  number_color = "black",
+  color = colorRampPalette(c("blue", "white", "red"))(100),
+  main = paste("Gene Correlation Heatmap (Tumor Samples):", cancer_type),
+  fontsize = 10
+)
+
+cat("Correlation analysis complete!\n\n")
+cat("Note: * p≤0.05, ** p≤0.01, *** p≤0.001\n\n")
+```
+
+## 4.6 Mutation Analysis - Download and Visualize
+
+```{r mutation-download, include=FALSE}
+cat("Downloading mutation data...\n")
+
+# Query mutation data
+query_mut <- GDCquery(
+  project = cancer_type,
+  data.category = "Simple Nucleotide Variation",
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+
+# Download mutation data
+GDCdownload(query_mut, method = "api")
+
+# Prepare mutation data
+stad_maf <- GDCprepare(query_mut)
+maf_object <- read.maf(stad_maf)
+
+cat("Mutation data downloaded!\n\n")
+```
+
+### Mutation Landscape - Oncoplot
+
+```{r mutation-oncoplot, fig.width=14, fig.height=10}
+cat("Creating mutation oncoplot...\n")
+
+# Plot mutations for genes of interest
+cat("\n Mutations in Your Genes of Interest:\n")
+oncoplot(
+  maf = maf_object,
+  genes = genes_of_interest
+)
+
+
+cat("\n Oncoplot shows mutation types and frequencies across samples\n")
+cat("   - Rows: Your genes of interest\n")
+cat("   - Columns: Patient samples\n")
+cat("   - Colors: Different mutation types (missense, nonsense, frameshift, etc.)\n\n")
+```
+
+### Top Mutated Genes in Dataset
+
+```{r mutation-top-genes, fig.width=14, fig.height=10}
+cat("Top 20 Most Mutated Genes in", cancer_type, ":\n")
+
+oncoplot(
+  maf = maf_object,
+  top = 20
+)
+
+
+cat("\n This shows the most frequently mutated genes in the entire cohort\n\n")
+```
+
+### Mutation Summary Statistics
+
+```{r mutation-summary}
+cat("Mutation Summary Statistics:\n\n")
+
+# Get summary
+maf_summary <- getSampleSummary(maf_object)
+
+# Get gene summary
+gene_summary <- getGeneSummary(maf_object)
+
+# Filter for genes of interest
+genes_mut_summary <- gene_summary[gene_summary$Hugo_Symbol %in% genes_of_interest, ]
+
+if (nrow(genes_mut_summary) > 0) {
+  cat("\n\nMutation Statistics for Your Genes:\n")
+  print(genes_mut_summary[, c("Hugo_Symbol", "total", "MutatedSamples", "AlteredSamples")])
+} else {
+  cat("\n\n⚠️ None of your genes of interest have mutations in this dataset\n")
+}
+```
+
+#### Table: Mutation types in sample sorted by highest total mutations
+
+```{r mutation-summary-reactable}
+# Display mutated samples sorted by most mutations
+reactable(maf_summary, 
+          defaultSortOrder = "desc", 
+          defaultPageSize = 5, 
+          striped = TRUE)
+
+```
+
+## 4.7 Clinical Variables Analysis
+
+```{r clinical-variables}
+cat("Analyzing clinical variables...\n")
+
+# Extract detailed clinical data
+clinical_data <- meta %>%
+  dplyr::select(
+    patient = submitter_id,
+    age = age_at_index,
+    gender,
+    race,
+    ethnicity,
+    vital_status,
+    tumor_stage = ajcc_pathologic_stage,
+    sample_type = shortLetterCode
+  ) %>%
+  distinct(patient, .keep_all = TRUE)
+
+cat("\n Clinical Data Summary:\n")
+cat("   Total patients:", nrow(clinical_data), "\n\n")
+
+# Age distribution
+cat("Age Statistics:\n")
+age_stats <- summary(clinical_data$age)
+print(age_stats)
+
+# Gender distribution
+cat("\n\nGender Distribution:\n")
+gender_table <- table(clinical_data$gender, useNA = "ifany")
+print(gender_table)
+
+# Race distribution
+cat("\n\nEthnicity Distribution:\n")
+race_table <- table(clinical_data$race, useNA = "ifany")
+print(race_table)
+
+# Tumor stage distribution
+cat("\n\nTumor Stage Distribution:\n")
+stage_table <- table(clinical_data$tumor_stage, useNA = "ifany")
+print(stage_table)
+
+# Vital status
+cat("\n\nVital Status:\n")
+vital_table <- table(clinical_data$vital_status, useNA = "ifany")
+print(vital_table)
+
+cat("\n")
+```
+
+### Clinical Variables Visualization
+
+```{r clinical-viz, fig.width=12, fig.height=8}
+cat("Creating clinical variable visualizations...\n")
+
+# Prepare data for plotting (tumor samples only)
+tumor_clinical <- clinical_data %>%
+  filter(!is.na(age), !is.na(gender))
+
+# Create plots
+p1 <- ggplot(tumor_clinical, aes(x = age)) +
+  geom_histogram(bins = 30, fill = "#16A085", color = "white") +
+  labs(title = "Age Distribution", x = "Age at Diagnosis", y = "Count") +
+  theme_bw()
+
+p2 <- ggplot(tumor_clinical, aes(x = gender, fill = gender)) +
+  geom_bar() +
+  scale_fill_manual(values = c("female" = "#E74C3C", "male" = "#3498DB")) +
+  labs(title = "Gender Distribution", x = "Gender", y = "Count") +
+  theme_bw() +
+  theme(legend.position = "none")
+
+# Combine plots
+combined_clinical <- p1 + p2
+print(combined_clinical)
+
+cat("Clinical visualizations created!\n\n")
+```
+
+### Survival by Clinical Variable
+
+```{r survival-clinical, fig.width=10, fig.height=6}
+cat("Survival analysis by clinical variables...\n")
+
+
+# Prepare survival data with clinical variables
+surv_clinical <- clinical_clean %>%
+  left_join(clinical_data, by = "patient") %>%
+  filter(!is.na(time), time > 0, !is.na(gender))
+
+# Survival by gender
+if (length(unique(surv_clinical$gender)) > 1) {
+  fit_gender <- survfit(Surv(time, status) ~ gender, data = surv_clinical)
+  
+  p_gender <- ggsurvplot(
+    fit_gender,
+    data = surv_clinical,
+    pval = TRUE,
+    title = paste("Survival by Gender:", cancer_type),
+    risk.table = TRUE,
+    risk.table.height = 0.25,
+    palette = c("#E74C3C", "#3498DB"),
+    legend.labs = c("Female", "Male"),
+    ggtheme = theme_bw(),
+    xlab = "Time (days)"
+  )
+  
+  print(p_gender)
+  cat("Gender-based survival analysis complete!\n\n")
+} else {
+  cat("Insufficient gender variation for survival analysis\n\n")
+}
+```
+
+# PART 5: Summary & Next Steps
+
+## 5.1 Analysis Summary
+
+```{r summary}
+cat("RESULTS SUMMARY:\n")
+cat("  Cancer Type:", cancer_type, "\n")
+cat("  Genes Analyzed:", length(genes_of_interest), "\n")
+cat("  Samples Analyzed:", ncol(logCPM), "\n")
+cat("  - Tumor:", sum(meta$shortLetterCode == "TP"), "\n")
+cat("  - Normal:", sum(meta$shortLetterCode == "NT"), "\n\n")
+cat("  Rdata file:", paste0(cancer_type, "_analysis_workspace.RData\n\n"))
+```
+
+### FILES CREATED:
+
+1. DE_results_all_genes.csv
+
+2. DE_results_genes_of_interest.csv
+
+3. volcano_plot.pdf
+
+4. expression_boxplots.pdf
+
+
+### ANALYSES PERFORMED:
+
+✓ Differential Expression (ALL genes)
+
+✓ Volcano Plot (genome-wide overview)
+
+✓ Expression Boxplots (tumor vs normal)
+
+✓ Expression Heatmap (clustered samples)
+
+✓ Survival Analysis (by expression level)
+
+✓ Gene Correlation Analysis
+
+✓ Mutation Analysis (oncoplot & statistics)
+
+✓ Clinical Variables Analysis
+
+✓ Survival by Clinical Variables
+
+------------------------------------------------------------------------
+
+## 5.2 Interpretation Guide
+
+**Understanding Your Results:**
+
+1.  **Volcano Plot**: Shows all genes. Genes in the upper corners (red dots) are significantly different between tumor and normal.
+
+2.  **Boxplots**: Compare expression levels between tumor and normal samples for each gene. P-values indicate statistical significance.
+
+3.  **Heatmap**: Shows expression patterns across all samples. Genes that cluster together have similar expression patterns.
+
+4.  **Survival Curves**: Show whether high vs low expression of your genes affects patient survival. Lower p-values indicate stronger associations.
+
+5.  **Correlation Heatmap**: Shows which genes are co-expressed (positive correlation) or inversely expressed (negative correlation). Spearman correlation value >0.5 (red) indicates postive correlation, <0.5 weak positive correlation, <0 negative correlation. * indicates pvalue significance <0.05. 
+
+6.  **Mutation Oncoplot**: Displays mutation types and frequencies for your genes across patient samples. Different colors represent different mutation types (missense, nonsense, frameshift, etc.).
+
+7.  **Clinical Variables**: Age, gender, ethnicity, and tumor stage distributions help contextualize your findings within the patient population.
+
+8.  **Survival by Clinical Variables**: Shows how demographic and clinical factors affect patient outcomes independently of gene expression.
+
+## 5.3 Next Steps
+
+**To analyze different genes or cancer types:**
+
+1.  Go back to **PART 2.1** and modify the parameters
+2.  Re-run the entire document (Ctrl/Cmd + Shift + K in RStudio)
+3.  All analyses will automatically update!
+
+**To explore further:**
+
+-   Add more genes to `genes_of_interest`
+-   Try different cancer types
+-   Adjust significance thresholds
+-   Export plots for presentations
+-   Investigate top differentially expressed genes
+
+------------------------------------------------------------------------
+
+**Questions? Need Help?**
+
+-   Check the TCGA documentation: <https://docs.gdc.cancer.gov/>
+-   TCGAbiolinks vignette: <http://bioconductor.org/packages/TCGAbiolinks/>
+-   Email [simran.kaur\@adelaide.edu.au](mailto:simran.kaur@adelaide.edu.au){.email} or [monica.guilhaus\@adelaide.edu.au](mailto:monica.guilhaus@adelaide.edu.au){.email}
+-   Or join our fortnightly Data Science Drop in Sessions.
+
+**Good luck with your research!**
