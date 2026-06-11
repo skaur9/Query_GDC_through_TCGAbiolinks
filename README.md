@@ -24,3 +24,34 @@ By completing this workshop, you should be able to:
 -   [ ] Analyze mutation data and create oncoplots
 -   [ ] Explore clinical variables and their impact
 -   [ ] Modify the workflow for your own research questions
+
+
+
+# Setup & Configuration
+
+## Install Required Packages (ONE-TIME ONLY)
+
+**Run this section only ONCE when setting up R for the first time**
+
+```{r install-packages, eval=FALSE}
+# Install BiocManager if not already installed
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+# Install Bioconductor packages
+BiocManager::install(c(
+  "TCGAbiolinks",
+  "SummarizedExperiment", 
+  "edgeR",
+  "DESeq2",
+  "org.Hs.eg.db",
+  "maftools"
+), ask = FALSE, update = FALSE)
+
+# Install CRAN packages
+install.packages(c(
+  "dplyr", "ggplot2", "pheatmap", "RColorBrewer",
+  "survival", "survminer", "ggpubr", "tibble", 
+  "Hmisc", "patchwork", "gridExtra", "reactable"
+))
