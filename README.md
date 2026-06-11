@@ -1,5 +1,5 @@
 # GDC_and_TCGAbiolinks
-Workflows and scripts to retrieve cancer omics data from NCI's Genomics Data Commons Portal and TCGAbiolinks
+Workflows and scripts to retrieve cancer omics data from NCI's Genomics Data Commons Portal through TCGAbiolinks
 
 
 This automated workflow will guide you through analyzing cancer genomics data from TCGA (The Cancer Genome Atlas) using R. By the end, you’ll be able to:
