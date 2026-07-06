@@ -1,4 +1,4 @@
-# GDC_and_TCGAbiolinks
+# GDC and TCGAbiolinks
 Workflows and scripts to retrieve cancer omics data from NCI's Genomics Data Commons Portal through TCGAbiolinks
 
 
